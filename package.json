@@ -1,7 +1,7 @@
 {
-  "name": "texflow-b2b-marketplace",
+  "name": "marketplace-b2b-app",
   "version": "1.0.0",
-  "description": "TexFlow - B2B Textile Marketplace (Buyer & Supplier Modules, AI Assistant)",
+  "description": "MarketPlace B2B Textile Platform",
   "main": "server/index.js",
   "scripts": {
     "install:all": "npm install && cd server && npm install && cd ../client && npm install",
@@ -9,6 +9,15 @@
     "client": "cd client && npm run dev",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "seed": "cd server && npm run seed"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.2",
+    "groq-sdk": "^1.5.0",
+    "jsonwebtoken": "^9.0.2",
+    "sqlite3": "^6.0.1"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
