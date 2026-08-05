@@ -11,3 +11,4 @@ client/build
 .idea
 server/db/*.db
 !server/db/schema.sql
+.vercel
