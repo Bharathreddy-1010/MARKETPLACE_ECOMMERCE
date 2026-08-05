@@ -1,0 +1,16 @@
+{
+  "name": "texflow-b2b-marketplace",
+  "version": "1.0.0",
+  "description": "TexFlow - B2B Textile Marketplace (Buyer & Supplier Modules, AI Assistant)",
+  "main": "server/index.js",
+  "scripts": {
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "server": "cd server && npm start",
+    "client": "cd client && npm run dev",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "seed": "cd server && npm run seed"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

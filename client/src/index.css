@@ -1,0 +1,176 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   MARKETPLACE / THE COUNTER — Minimal Luxury B2B Editorial Design System
+   Serif Headings: Cormorant Garamond
+   Body / Specs: Plus Jakarta Sans
+   Background: #fbf9f4 (Warm Paper Cream)
+   ============================================================ */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    background-color: #fbf9f4;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    background-color: #fbf9f4;
+    color: #1c1917;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: #1c1917;
+    color: #ffffff;
+  }
+}
+
+@layer components {
+  /* ---- Card Layout matching reference template ---- */
+  .editorial-card {
+    background-color: #ffffff;
+    border: 1px solid #e7e5e4;
+    border-radius: 0.25rem;
+    transition: all 0.25s ease-in-out;
+  }
+
+  .editorial-card:hover {
+    border-color: #a8a29e;
+    box-shadow: 0 4px 20px -2px rgba(28, 25, 23, 0.06);
+  }
+
+  /* ---- Buttons matching reference image ---- */
+  .btn-dark {
+    background-color: #0f172a;
+    color: #ffffff;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.75rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.25rem;
+    transition: background-color 0.2s ease;
+  }
+
+  .btn-dark:hover {
+    background-color: #1e293b;
+  }
+
+  .btn-outline {
+    background-color: transparent;
+    border: 1px solid #d6d3d1;
+    color: #44403c;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.75rem;
+    padding: 0.4rem 0.85rem;
+    border-radius: 0.25rem;
+    transition: all 0.2s ease;
+  }
+
+  .btn-outline:hover {
+    border-color: #1c1917;
+    color: #1c1917;
+    background-color: #f7f4ee;
+  }
+
+  /* ---- House Pick Gold Badge ---- */
+  .badge-house-pick {
+    background-color: #ca8a04;
+    color: #ffffff;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 700;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.125rem;
+  }
+
+  /* ---- Filter Pills ---- */
+  .filter-pill {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 0.35rem 0.75rem;
+    border-radius: 0.25rem;
+    transition: all 0.2s ease;
+  }
+
+  .filter-pill-active {
+    background-color: #0f172a;
+    color: #ffffff;
+  }
+
+  .filter-pill-inactive {
+    background-color: #f4f1ea;
+    color: #57534e;
+    border: 1px solid #e7e5e4;
+  }
+
+  .filter-pill-inactive:hover {
+    background-color: #efece4;
+    color: #1c1917;
+  }
+
+  /* ---- Editorial Input ---- */
+  .input-editorial {
+    background-color: #f9f8f3;
+    border: 1px solid #e7e5e4;
+    color: #1c1917;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 0.8125rem;
+    padding: 0.6rem 0.85rem;
+    border-radius: 0.25rem;
+    transition: border-color 0.2s ease;
+  }
+
+  .input-editorial:focus {
+    outline: none;
+    border-color: #0f172a;
+    background-color: #ffffff;
+  }
+
+  /* ---- 3D Reserved Slot Container ---- */
+  .placeholder-3d-slot {
+    background: linear-gradient(135deg, #f4f1ea 0%, #efece4 100%);
+    border: 2px dashed #d6d3d1;
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #78716c;
+  }
+}
+
+@layer utilities {
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #fbf9f4;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d6d3d1;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #a8a29e;
+  }
+}
