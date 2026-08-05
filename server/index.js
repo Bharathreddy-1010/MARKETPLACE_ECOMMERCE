@@ -43,9 +43,13 @@ if (require('fs').existsSync(clientBuildPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`🚀 TexFlow Backend API running at http://localhost:${PORT}`);
-  if (process.env.GROQ_API_KEY) {
-    console.log('🤖 Groq AI API Key Loaded Successfully!');
-  }
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 MarketPlace Backend API running at http://localhost:${PORT}`);
+    if (process.env.GROQ_API_KEY) {
+      console.log('🤖 Groq AI API Key Loaded Successfully!');
+    }
+  });
+}
+
+module.exports = app;
