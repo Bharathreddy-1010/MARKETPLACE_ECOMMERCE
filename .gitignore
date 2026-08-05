@@ -10,5 +10,6 @@ client/build
 .vscode
 .idea
 server/db/*.db
+!server/db/texflow.db
 !server/db/schema.sql
 .vercel

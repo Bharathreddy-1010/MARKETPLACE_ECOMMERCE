@@ -2,7 +2,18 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, 'texflow.db');
+const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const LOCAL_DB = path.join(__dirname, 'texflow.db');
+const DB_PATH = isVercel ? '/tmp/texflow.db' : LOCAL_DB;
+
+if (isVercel && fs.existsSync(LOCAL_DB) && !fs.existsSync('/tmp/texflow.db')) {
+  try {
+    fs.copyFileSync(LOCAL_DB, '/tmp/texflow.db');
+  } catch (e) {
+    console.error('Failed to copy database to /tmp:', e.message);
+  }
+}
+
 const SEED_DATA_PATH = path.join(__dirname, 'data.json');
 
 // Connect to SQLite Database
@@ -10,7 +21,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) {
     console.error('❌ Failed to connect to SQLite Database:', err.message);
   } else {
-    console.log('📦 Connected to SQLite Database at server/db/texflow.db');
+    console.log(`📦 Connected to SQLite Database at ${DB_PATH}`);
   }
 });
 
