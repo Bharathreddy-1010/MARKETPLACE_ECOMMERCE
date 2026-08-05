@@ -51,8 +51,8 @@ function runQuery(sql, params = []) {
   return new Promise((resolve, reject) => {
     if (db) {
       db.run(sql, params, function (err) {
-        if (err) return resolve({ lastID: Date.now(), changes: 1 });
-        resolve(this);
+        if (err) resolve({ lastID: Date.now(), changes: 1 });
+        else resolve(this);
       });
     } else {
       resolve({ lastID: Date.now(), changes: 1 });
@@ -64,8 +64,8 @@ function getQuery(sql, params = []) {
   return new Promise((resolve, reject) => {
     if (db) {
       db.get(sql, params, (err, row) => {
-        if (err || !row) return resolve(inMemoryGet(sql, params));
-        resolve(row);
+        if (err || !row) resolve(inMemoryGet(sql, params));
+        else resolve(row);
       });
     } else {
       resolve(inMemoryGet(sql, params));
@@ -77,8 +77,8 @@ function allQuery(sql, params = []) {
   return new Promise((resolve, reject) => {
     if (db) {
       db.all(sql, params, (err, rows) => {
-        if (err || !rows || rows.length === 0) return resolve(inMemoryAll(sql, params));
-        resolve(rows);
+        if (err || !rows || rows.length === 0) resolve(inMemoryAll(sql, params));
+        else resolve(rows);
       });
     } else {
       resolve(inMemoryAll(sql, params));
@@ -93,7 +93,7 @@ function inMemoryGet(sql, params) {
   if (lowerSql.includes('from users')) {
     if (lowerSql.includes('email =')) {
       const email = params[0];
-      return store.users.find(u => u.email === email) || null;
+      return store.users.find(u => (u.email || '').toLowerCase() === (email || '').toLowerCase()) || null;
     }
     if (lowerSql.includes('id =')) {
       const id = params[0];
@@ -132,6 +132,27 @@ function formatProductRow(p) {
     leadTimes: typeof p.leadTimes === 'string' ? p.leadTimes : JSON.stringify(p.leadTimes || {}),
     ecoMetrics: typeof p.ecoMetrics === 'string' ? p.ecoMetrics : JSON.stringify(p.ecoMetrics || {}),
     millDetails: typeof p.millDetails === 'string' ? p.millDetails : JSON.stringify(p.millDetails || {})
+  };
+}
+
+function parseJsonField(val, fallback) {
+  if (!val) return fallback;
+  if (typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch (e) { return fallback; }
+}
+
+function parseProductRow(p) {
+  if (!p) return null;
+  return {
+    ...p,
+    priceTiers: parseJsonField(p.priceTiers, []),
+    colors: parseJsonField(p.colors, []),
+    certifications: parseJsonField(p.certifications, []),
+    images: parseJsonField(p.images, []),
+    leadTimes: parseJsonField(p.leadTimes, {}),
+    ecoMetrics: parseJsonField(p.ecoMetrics, {}),
+    millDetails: parseJsonField(p.millDetails, {}),
+    inStock: Boolean(p.inStock)
   };
 }
 
@@ -201,25 +222,112 @@ async function initDb() {
   });
 }
 
-function parseJsonField(val, fallback) {
-  if (!val) return fallback;
-  if (typeof val === 'object') return val;
-  try { return JSON.parse(val); } catch (e) { return fallback; }
+// ── PRODUCT API HELPERS ──
+async function getProducts() {
+  const rows = await allQuery('SELECT * FROM products');
+  return rows.map(parseProductRow);
 }
 
-function parseProductRow(p) {
-  if (!p) return null;
-  return {
-    ...p,
-    priceTiers: parseJsonField(p.priceTiers, []),
-    colors: parseJsonField(p.colors, []),
-    certifications: parseJsonField(p.certifications, []),
-    images: parseJsonField(p.images, []),
-    leadTimes: parseJsonField(p.leadTimes, {}),
-    ecoMetrics: parseJsonField(p.ecoMetrics, {}),
-    millDetails: parseJsonField(p.millDetails, {}),
-    inStock: Boolean(p.inStock)
-  };
+async function getProductById(id) {
+  const row = await getQuery('SELECT * FROM products WHERE id = ?', [id]);
+  return parseProductRow(row);
+}
+
+async function createProduct(prod) {
+  const id = prod.id || 'prod_' + Date.now();
+  await runQuery(
+    `INSERT INTO products (
+      id, name, supplierId, supplierName, category, description, price, priceTiers,
+      moq, stock, inStock, gsm, width, weave, fiberComposition, colors, certifications, images, createdAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id, prod.name, prod.supplierId || 'user_supplier_demo', prod.supplierName || 'Apex Mills International',
+      prod.category, prod.description || '', prod.price, JSON.stringify(prod.priceTiers || []),
+      prod.moq, prod.stock, prod.inStock ? 1 : 0, prod.gsm || 150, prod.width || '150 cm',
+      prod.weave || 'Plain', prod.fiberComposition || '100% Cotton', JSON.stringify(prod.colors || []),
+      JSON.stringify(prod.certifications || []), JSON.stringify(prod.images || []), new Date().toISOString()
+    ]
+  );
+  return getProductById(id);
+}
+
+async function updateProduct(id, updates) {
+  const existing = await getProductById(id);
+  if (!existing) return null;
+  const merged = { ...existing, ...updates };
+  await runQuery(
+    `UPDATE products SET name=?, category=?, price=?, moq=?, stock=?, inStock=?, description=? WHERE id=?`,
+    [merged.name, merged.category, merged.price, merged.moq, merged.stock, merged.inStock ? 1 : 0, merged.description, id]
+  );
+  return getProductById(id);
+}
+
+async function deleteProduct(id) {
+  await runQuery('DELETE FROM products WHERE id = ?', [id]);
+  return true;
+}
+
+// ── USER API HELPERS ──
+async function findUserByEmail(email) {
+  return getQuery('SELECT * FROM users WHERE email = ?', [email]);
+}
+
+async function findUserById(id) {
+  return getQuery('SELECT * FROM users WHERE id = ?', [id]);
+}
+
+async function createUser(user) {
+  const id = user.id || 'user_' + Date.now();
+  await runQuery(
+    `INSERT INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, user.email, user.password, user.name, user.role, user.company || user.companyName || '', 0, user.createdAt || new Date().toISOString()]
+  );
+  return findUserById(id);
+}
+
+// ── ORDER API HELPERS ──
+async function getBuyerOrders(buyerId) {
+  const rows = await allQuery('SELECT * FROM orders WHERE buyerId = ? ORDER BY createdAt DESC', [buyerId]);
+  return rows.map(r => ({
+    ...r,
+    items: parseJsonField(r.items, []),
+    shippingAddress: parseJsonField(r.shippingAddress, {})
+  }));
+}
+
+async function getSupplierOrders() {
+  const rows = await allQuery('SELECT * FROM orders ORDER BY createdAt DESC');
+  return rows.map(r => ({
+    ...r,
+    items: parseJsonField(r.items, []),
+    shippingAddress: parseJsonField(r.shippingAddress, {})
+  }));
+}
+
+async function createOrder(orderData) {
+  const id = orderData.id || 'ord_' + Date.now();
+  const orderNumber = orderData.orderNumber || 'ORD-' + Math.floor(100000 + Math.random() * 900000);
+  const totalAmount = orderData.totalAmount || orderData.total || 0;
+  
+  await runQuery(
+    `INSERT INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id, orderData.buyerId, orderData.buyerName, orderData.buyerCompany,
+      orderData.supplierId || 'user_supplier_demo', orderData.supplierName || 'Apex Mills International',
+      orderNumber, JSON.stringify(orderData.items || []), totalAmount, totalAmount,
+      orderData.status || 'Pending', JSON.stringify(orderData.shippingAddress || {}),
+      orderData.paymentStatus || 'Paid', orderData.paymentMethod || 'Credit Card',
+      orderData.notes || '', new Date().toISOString()
+    ]
+  );
+  return { id, orderNumber, totalAmount, ...orderData };
+}
+
+async function updateOrderStatus(orderId, status) {
+  await runQuery('UPDATE orders SET status = ? WHERE id = ?', [status, orderId]);
+  return true;
 }
 
 module.exports = {
@@ -228,6 +336,18 @@ module.exports = {
   runQuery,
   getQuery,
   allQuery,
+  getProducts,
+  getProductById,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  findUserByEmail,
+  findUserById,
+  createUser,
+  getBuyerOrders,
+  getSupplierOrders,
+  createOrder,
+  updateOrderStatus,
   parseProductRow,
   parseJsonField
 };
