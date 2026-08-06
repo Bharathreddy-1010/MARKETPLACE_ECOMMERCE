@@ -33,7 +33,7 @@ if (sqlite3) {
   }
 }
 
-// In-memory JSON fallback store for serverless environments
+// In-memory JSON store for serverless environments & real-time sync
 let memoryStore = null;
 function getMemoryStore() {
   if (!memoryStore) {
@@ -91,7 +91,7 @@ function inMemoryGet(sql, params) {
   const lowerSql = sql.toLowerCase();
 
   if (lowerSql.includes('from users')) {
-    if (lowerSql.includes('email =')) {
+    if (lowerSql.includes('email =') || lowerSql.includes('lower(email) =')) {
       const email = params[0];
       return store.users.find(u => (u.email || '').toLowerCase() === (email || '').toLowerCase()) || null;
     }
@@ -234,18 +234,31 @@ async function getProductById(id) {
 }
 
 async function createProduct(prod) {
+  const store = getMemoryStore();
   const id = prod.id || 'prod_' + Date.now();
+  const newProd = {
+    ...prod,
+    id,
+    supplierId: prod.supplierId || 'user_supplier_demo',
+    supplierName: prod.supplierName || 'Apex Mills International',
+    inStock: prod.inStock ?? true,
+    createdAt: new Date().toISOString()
+  };
+  
+  if (!store.products) store.products = [];
+  store.products.unshift(newProd);
+
   await runQuery(
     `INSERT INTO products (
       id, name, supplierId, supplierName, category, description, price, priceTiers,
       moq, stock, inStock, gsm, width, weave, fiberComposition, colors, certifications, images, createdAt
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      id, prod.name, prod.supplierId || 'user_supplier_demo', prod.supplierName || 'Apex Mills International',
-      prod.category, prod.description || '', prod.price, JSON.stringify(prod.priceTiers || []),
-      prod.moq, prod.stock, prod.inStock ? 1 : 0, prod.gsm || 150, prod.width || '150 cm',
-      prod.weave || 'Plain', prod.fiberComposition || '100% Cotton', JSON.stringify(prod.colors || []),
-      JSON.stringify(prod.certifications || []), JSON.stringify(prod.images || []), new Date().toISOString()
+      id, newProd.name, newProd.supplierId, newProd.supplierName,
+      newProd.category, newProd.description || '', newProd.price, JSON.stringify(newProd.priceTiers || []),
+      newProd.moq, newProd.stock, newProd.inStock ? 1 : 0, newProd.gsm || 150, newProd.width || '150 cm',
+      newProd.weave || 'Plain', newProd.fiberComposition || '100% Cotton', JSON.stringify(newProd.colors || []),
+      JSON.stringify(newProd.certifications || []), JSON.stringify(newProd.images || []), newProd.createdAt
     ]
   );
   return getProductById(id);
@@ -255,6 +268,13 @@ async function updateProduct(id, updates) {
   const existing = await getProductById(id);
   if (!existing) return null;
   const merged = { ...existing, ...updates };
+
+  const store = getMemoryStore();
+  if (store.products) {
+    const idx = store.products.findIndex(p => p.id === id);
+    if (idx >= 0) store.products[idx] = merged;
+  }
+
   await runQuery(
     `UPDATE products SET name=?, category=?, price=?, moq=?, stock=?, inStock=?, description=? WHERE id=?`,
     [merged.name, merged.category, merged.price, merged.moq, merged.stock, merged.inStock ? 1 : 0, merged.description, id]
@@ -263,70 +283,133 @@ async function updateProduct(id, updates) {
 }
 
 async function deleteProduct(id) {
+  const store = getMemoryStore();
+  if (store.products) {
+    store.products = store.products.filter(p => p.id !== id);
+  }
   await runQuery('DELETE FROM products WHERE id = ?', [id]);
   return true;
 }
 
 // ── USER API HELPERS ──
 async function findUserByEmail(email) {
-  return getQuery('SELECT * FROM users WHERE email = ?', [email]);
+  if (!email) return null;
+  const store = getMemoryStore();
+  const foundInMemory = store.users.find(u => (u.email || '').toLowerCase() === (email || '').toLowerCase());
+  if (foundInMemory) return foundInMemory;
+
+  return getQuery('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
 }
 
 async function findUserById(id) {
+  if (!id) return null;
+  const store = getMemoryStore();
+  const foundInMemory = store.users.find(u => u.id === id);
+  if (foundInMemory) return foundInMemory;
+
   return getQuery('SELECT * FROM users WHERE id = ?', [id]);
 }
 
 async function createUser(user) {
+  const store = getMemoryStore();
+  if (!store.users) store.users = [];
+
   const id = user.id || 'user_' + Date.now();
+  const newUser = {
+    ...user,
+    id,
+    companyName: user.company || user.companyName || '',
+    onboardingCompleted: user.onboardingCompleted ? 1 : 0,
+    createdAt: user.createdAt || new Date().toISOString()
+  };
+
+  const existingIdx = store.users.findIndex(u => (u.email || '').toLowerCase() === (user.email || '').toLowerCase());
+  if (existingIdx >= 0) {
+    store.users[existingIdx] = newUser;
+  } else {
+    store.users.push(newUser);
+  }
+
   await runQuery(
     `INSERT INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, user.email, user.password, user.name, user.role, user.company || user.companyName || '', 0, user.createdAt || new Date().toISOString()]
+    [id, newUser.email, newUser.password, newUser.name, newUser.role, newUser.companyName, newUser.onboardingCompleted, newUser.createdAt]
   );
-  return findUserById(id);
+  return newUser;
 }
 
 // ── ORDER API HELPERS ──
+async function getOrders() {
+  const store = getMemoryStore();
+  const dbRows = await allQuery('SELECT * FROM orders ORDER BY createdAt DESC');
+  
+  const map = new Map();
+  (store.orders || []).forEach(o => map.set(o.id || o.orderNumber, o));
+  dbRows.forEach(r => {
+    const formatted = {
+      ...r,
+      items: parseJsonField(r.items, []),
+      shippingAddress: parseJsonField(r.shippingAddress, {})
+    };
+    map.set(r.id || r.orderNumber, formatted);
+  });
+  
+  return Array.from(map.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
 async function getBuyerOrders(buyerId) {
-  const rows = await allQuery('SELECT * FROM orders WHERE buyerId = ? ORDER BY createdAt DESC', [buyerId]);
-  return rows.map(r => ({
-    ...r,
-    items: parseJsonField(r.items, []),
-    shippingAddress: parseJsonField(r.shippingAddress, {})
-  }));
+  const all = await getOrders();
+  if (!buyerId) return all;
+  const filtered = all.filter(o => o.buyerId === buyerId || o.buyerEmail === buyerId);
+  return filtered.length > 0 ? filtered : all;
 }
 
 async function getSupplierOrders() {
-  const rows = await allQuery('SELECT * FROM orders ORDER BY createdAt DESC');
-  return rows.map(r => ({
-    ...r,
-    items: parseJsonField(r.items, []),
-    shippingAddress: parseJsonField(r.shippingAddress, {})
-  }));
+  return getOrders();
 }
 
 async function createOrder(orderData) {
+  const store = getMemoryStore();
+  if (!store.orders) store.orders = [];
+
   const id = orderData.id || 'ord_' + Date.now();
   const orderNumber = orderData.orderNumber || 'ORD-' + Math.floor(100000 + Math.random() * 900000);
   const totalAmount = orderData.totalAmount || orderData.total || 0;
-  
+
+  const fullOrder = {
+    ...orderData,
+    id,
+    orderNumber,
+    totalAmount,
+    total: totalAmount,
+    status: orderData.status || 'Pending',
+    createdAt: orderData.createdAt || new Date().toISOString()
+  };
+
+  store.orders.unshift(fullOrder);
+
   await runQuery(
     `INSERT INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      id, orderData.buyerId, orderData.buyerName, orderData.buyerCompany,
-      orderData.supplierId || 'user_supplier_demo', orderData.supplierName || 'Apex Mills International',
-      orderNumber, JSON.stringify(orderData.items || []), totalAmount, totalAmount,
-      orderData.status || 'Pending', JSON.stringify(orderData.shippingAddress || {}),
-      orderData.paymentStatus || 'Paid', orderData.paymentMethod || 'Credit Card',
-      orderData.notes || '', new Date().toISOString()
+      id, fullOrder.buyerId, fullOrder.buyerName, fullOrder.buyerCompany,
+      fullOrder.supplierId || 'user_supplier_demo', fullOrder.supplierName || 'Apex Mills International',
+      orderNumber, JSON.stringify(fullOrder.items || []), totalAmount, totalAmount,
+      fullOrder.status || 'Pending', JSON.stringify(fullOrder.shippingAddress || {}),
+      fullOrder.paymentStatus || 'Paid', fullOrder.paymentMethod || 'Credit Card',
+      fullOrder.notes || '', fullOrder.createdAt
     ]
   );
-  return { id, orderNumber, totalAmount, ...orderData };
+  return fullOrder;
 }
 
 async function updateOrderStatus(orderId, status) {
-  await runQuery('UPDATE orders SET status = ? WHERE id = ?', [status, orderId]);
+  const store = getMemoryStore();
+  if (store.orders) {
+    const found = store.orders.find(o => o.id === orderId || o.orderNumber === orderId);
+    if (found) found.status = status;
+  }
+  await runQuery('UPDATE orders SET status = ? WHERE id = ? OR orderNumber = ?', [status, orderId, orderId]);
   return true;
 }
 
@@ -347,6 +430,12 @@ async function saveOnboardingProfile(profileData) {
   } else {
     store.onboarding_profiles.push(profileData);
   }
+
+  if (store.users) {
+    const user = store.users.find(u => u.id === profileData.userId);
+    if (user) user.onboardingCompleted = 1;
+  }
+
   await runQuery('UPDATE users SET onboardingCompleted = 1 WHERE id = ?', [profileData.userId]);
   return profileData;
 }
@@ -365,6 +454,7 @@ module.exports = {
   findUserByEmail,
   findUserById,
   createUser,
+  getOrders,
   getBuyerOrders,
   getSupplierOrders,
   createOrder,
