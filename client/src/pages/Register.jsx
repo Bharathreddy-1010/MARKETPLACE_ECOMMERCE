@@ -25,7 +25,7 @@ export default function Register() {
       if (role === 'supplier') {
         navigate('/supplier-dashboard');
       } else {
-        navigate('/marketplace');
+        navigate('/');
       }
     } catch (err) {
       setError(err.message || 'Registration failed');

@@ -22,7 +22,7 @@ export default function Login() {
       if (res.user.role === 'supplier') {
         navigate('/supplier-dashboard');
       } else {
-        navigate('/marketplace');
+        navigate('/');
       }
     } catch (err) {
       setError(err.message || 'Login failed');
@@ -38,7 +38,7 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await login('buyer@demo.com', 'password123');
-      navigate('/marketplace');
+      navigate('/');
     } catch (err) {
       setError(err.message || '1-Click login failed');
     } finally {
