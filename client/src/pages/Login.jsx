@@ -31,14 +31,34 @@ export default function Login() {
     }
   };
 
-  const fillDemoBuyer = () => {
+  const fillDemoBuyer = async () => {
     setEmail('buyer@demo.com');
     setPassword('password123');
+    setError('');
+    setLoading(true);
+    try {
+      const res = await login('buyer@demo.com', 'password123');
+      navigate('/marketplace');
+    } catch (err) {
+      setError(err.message || '1-Click login failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const fillDemoSupplier = () => {
+  const fillDemoSupplier = async () => {
     setEmail('supplier@demo.com');
     setPassword('password123');
+    setError('');
+    setLoading(true);
+    try {
+      const res = await login('supplier@demo.com', 'password123');
+      navigate('/supplier-dashboard');
+    } catch (err) {
+      setError(err.message || '1-Click login failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
