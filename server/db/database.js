@@ -330,6 +330,27 @@ async function updateOrderStatus(orderId, status) {
   return true;
 }
 
+// ── ONBOARDING API HELPERS ──
+async function getOnboardingProfile(userId) {
+  const store = getMemoryStore();
+  const found = (store.onboarding_profiles || []).find(p => p.userId === userId);
+  if (found) return found;
+  return getQuery('SELECT * FROM onboarding_profiles WHERE userId = ?', [userId]);
+}
+
+async function saveOnboardingProfile(profileData) {
+  const store = getMemoryStore();
+  if (!store.onboarding_profiles) store.onboarding_profiles = [];
+  const existingIdx = store.onboarding_profiles.findIndex(p => p.userId === profileData.userId);
+  if (existingIdx >= 0) {
+    store.onboarding_profiles[existingIdx] = { ...store.onboarding_profiles[existingIdx], ...profileData };
+  } else {
+    store.onboarding_profiles.push(profileData);
+  }
+  await runQuery('UPDATE users SET onboardingCompleted = 1 WHERE id = ?', [profileData.userId]);
+  return profileData;
+}
+
 module.exports = {
   db,
   initDb,
@@ -348,6 +369,8 @@ module.exports = {
   getSupplierOrders,
   createOrder,
   updateOrderStatus,
+  getOnboardingProfile,
+  saveOnboardingProfile,
   parseProductRow,
   parseJsonField
 };

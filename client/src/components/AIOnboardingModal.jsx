@@ -50,11 +50,11 @@ export default function AIOnboardingModal({ isOpen, onClose }) {
     setLoading(true);
     try {
       await updateOnboarding(formData);
-      onClose();
     } catch (err) {
       console.error('Onboarding submission failed:', err);
     } finally {
       setLoading(false);
+      onClose();
     }
   };
 
