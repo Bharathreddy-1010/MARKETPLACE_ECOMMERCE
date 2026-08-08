@@ -1,138 +1,234 @@
+const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
-let sqlite3;
-try {
-  sqlite3 = require('sqlite3').verbose();
-} catch (e) {
-  console.warn('⚠️ SQLite3 native module failed to load. Using in-memory fallback store.');
-}
-
 const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const LOCAL_DB = path.join(__dirname, 'texflow.db');
-const DB_PATH = isVercel ? '/tmp/texflow.db' : LOCAL_DB;
+const DB_PATH = isVercel ? '/tmp/texflow.db' : path.join(__dirname, 'texflow.db');
 const SEED_DATA_PATH = path.join(__dirname, 'data.json');
 
-if (isVercel && fs.existsSync(LOCAL_DB) && !fs.existsSync('/tmp/texflow.db')) {
-  try {
-    fs.copyFileSync(LOCAL_DB, '/tmp/texflow.db');
-  } catch (e) {
-    console.error('Failed to copy database to /tmp:', e.message);
-  }
-}
-
 let db = null;
-if (sqlite3) {
-  try {
-    db = new sqlite3.Database(DB_PATH, (err) => {
-      if (err) console.error('❌ Failed to connect to SQLite Database:', err.message);
-      else console.log(`📦 Connected to SQLite Database at ${DB_PATH}`);
-    });
-  } catch (e) {
-    console.warn('⚠️ Could not initialize SQLite instance:', e.message);
-  }
-}
+let SQL = null;
+let initPromise = null;
 
-// In-memory JSON store for serverless environments & real-time sync
-let memoryStore = null;
-function getMemoryStore() {
-  if (!memoryStore) {
+async function initDatabase() {
+  if (db) return db;
+  if (initPromise) return initPromise;
+
+  initPromise = (async () => {
     try {
-      const data = fs.readFileSync(SEED_DATA_PATH, 'utf8');
-      memoryStore = JSON.parse(data);
+      SQL = await initSqlJs();
+      if (fs.existsSync(DB_PATH)) {
+        const filebuffer = fs.readFileSync(DB_PATH);
+        db = new SQL.Database(filebuffer);
+      } else {
+        db = new SQL.Database();
+      }
+      console.log(`📦 Connected to WASM SQLite Database at ${DB_PATH}`);
+      await createTablesAndSeed();
+    } catch (err) {
+      console.error('❌ Failed to initialize WASM SQLite Database:', err);
+    }
+    return db;
+  })();
+
+  return initPromise;
+}
+
+function saveDbToDisk() {
+  if (!db) return;
+  try {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+  } catch (e) {
+    // ignore on read-only file systems
+  }
+}
+
+async function createTablesAndSeed() {
+  if (!db) return;
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      name TEXT,
+      role TEXT NOT NULL,
+      companyName TEXT,
+      onboardingCompleted INTEGER DEFAULT 0,
+      createdAt TEXT
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      supplierId TEXT,
+      supplierName TEXT,
+      category TEXT NOT NULL,
+      description TEXT,
+      price REAL NOT NULL,
+      priceTiers TEXT,
+      moq INTEGER NOT NULL,
+      stock INTEGER NOT NULL,
+      inStock INTEGER DEFAULT 1,
+      gsm INTEGER,
+      width TEXT,
+      weave TEXT,
+      fiberComposition TEXT,
+      colors TEXT,
+      certifications TEXT,
+      leadTimes TEXT,
+      ecoMetrics TEXT,
+      millDetails TEXT,
+      images TEXT,
+      rating REAL DEFAULT 4.8,
+      reviewCount INTEGER DEFAULT 0,
+      createdAt TEXT
+    );
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      buyerId TEXT NOT NULL,
+      buyerName TEXT,
+      buyerCompany TEXT,
+      supplierId TEXT,
+      supplierName TEXT,
+      orderNumber TEXT UNIQUE NOT NULL,
+      items TEXT NOT NULL,
+      totalAmount REAL,
+      total REAL,
+      status TEXT NOT NULL,
+      shippingAddress TEXT,
+      paymentStatus TEXT,
+      paymentMethod TEXT,
+      notes TEXT,
+      createdAt TEXT
+    );
+    CREATE TABLE IF NOT EXISTS onboarding_profiles (
+      userId TEXT PRIMARY KEY,
+      role TEXT,
+      businessType TEXT,
+      industry TEXT,
+      categoriesOfInterest TEXT,
+      preferredFabricTypes TEXT,
+      typicalOrderQty TEXT,
+      budgetRange TEXT,
+      minOrderQty INTEGER,
+      contactPhone TEXT,
+      operatingHours TEXT,
+      notes TEXT
+    );
+  `);
+
+  try { db.run('ALTER TABLE orders ADD COLUMN buyerName TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN buyerCompany TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN supplierId TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN supplierName TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN paymentStatus TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN paymentMethod TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN notes TEXT;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN totalAmount REAL;'); } catch(e){}
+  try { db.run('ALTER TABLE orders ADD COLUMN total REAL;'); } catch(e){}
+
+  // Seed baseline data from data.json if products table is empty
+  const checkStmt = db.prepare('SELECT COUNT(*) as count FROM products');
+  let count = 0;
+  if (checkStmt.step()) {
+    count = checkStmt.getAsObject().count;
+  }
+  checkStmt.free();
+
+  if (count === 0 && fs.existsSync(SEED_DATA_PATH)) {
+    try {
+      const seedRaw = fs.readFileSync(SEED_DATA_PATH, 'utf8');
+      const seedData = JSON.parse(seedRaw);
+
+      if (Array.isArray(seedData.users)) {
+        for (const u of seedData.users) {
+          db.run(
+            `INSERT OR IGNORE INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [u.id, u.email, u.password, u.name, u.role, u.companyName || u.company || '', u.onboardingCompleted ? 1 : 0, u.createdAt || new Date().toISOString()]
+          );
+        }
+      }
+
+      if (Array.isArray(seedData.products)) {
+        for (const p of seedData.products) {
+          db.run(
+            `INSERT OR IGNORE INTO products (
+              id, name, supplierId, supplierName, category, description, price, priceTiers,
+              moq, stock, inStock, gsm, width, weave, fiberComposition, colors, certifications, images, createdAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              p.id, p.name, p.supplierId || 'user_supplier_demo', p.supplierName || 'Apex Mills International',
+              p.category, p.description || '', p.price, JSON.stringify(p.priceTiers || []),
+              p.moq, p.stock, p.inStock ? 1 : 0, p.gsm || 150, p.width || '150 cm',
+              p.weave || 'Plain', p.fiberComposition || '100% Cotton', JSON.stringify(p.colors || []),
+              JSON.stringify(p.certifications || []), JSON.stringify(p.images || []), p.createdAt || new Date().toISOString()
+            ]
+          );
+        }
+      }
+
+      if (Array.isArray(seedData.orders)) {
+        for (const o of seedData.orders) {
+          db.run(
+            `INSERT OR IGNORE INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              o.id, o.buyerId, o.buyerName, o.buyerCompany,
+              o.supplierId || 'user_supplier_demo', o.supplierName || 'Apex Mills International',
+              o.orderNumber || o.id, JSON.stringify(o.items || []), o.totalAmount || o.total || 0, o.total || o.totalAmount || 0,
+              o.status || 'Pending', JSON.stringify(o.shippingAddress || {}),
+              o.paymentStatus || 'Paid', o.paymentMethod || 'Credit Card',
+              o.notes || '', o.createdAt || new Date().toISOString()
+            ]
+          );
+        }
+      }
+
+      saveDbToDisk();
     } catch (e) {
-      memoryStore = { users: [], products: [], orders: [], onboarding_profiles: [] };
+      console.error('Error seeding data:', e);
     }
   }
-  return memoryStore;
 }
 
-function runQuery(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    if (db) {
-      db.run(sql, params, function (err) {
-        if (err) resolve({ lastID: Date.now(), changes: 1 });
-        else resolve(this);
-      });
-    } else {
-      resolve({ lastID: Date.now(), changes: 1 });
-    }
-  });
+function sanitizeParams(params = []) {
+  return params.map(p => (p === undefined ? null : p));
 }
 
-function getQuery(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    if (db) {
-      db.get(sql, params, (err, row) => {
-        if (err || !row) resolve(inMemoryGet(sql, params));
-        else resolve(row);
-      });
-    } else {
-      resolve(inMemoryGet(sql, params));
-    }
-  });
+async function runQuery(sql, params = []) {
+  const dbInst = await initDatabase();
+  if (!dbInst) return { lastID: Date.now(), changes: 1 };
+  dbInst.run(sql, sanitizeParams(params));
+  saveDbToDisk();
+  return { lastID: Date.now(), changes: 1 };
 }
 
-function allQuery(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    if (db) {
-      db.all(sql, params, (err, rows) => {
-        if (err || !rows || rows.length === 0) resolve(inMemoryAll(sql, params));
-        else resolve(rows);
-      });
-    } else {
-      resolve(inMemoryAll(sql, params));
-    }
-  });
-}
-
-function inMemoryGet(sql, params) {
-  const store = getMemoryStore();
-  const lowerSql = sql.toLowerCase();
-
-  if (lowerSql.includes('from users')) {
-    if (lowerSql.includes('email =') || lowerSql.includes('lower(email) =')) {
-      const email = params[0];
-      return store.users.find(u => (u.email || '').toLowerCase() === (email || '').toLowerCase()) || null;
-    }
-    if (lowerSql.includes('id =')) {
-      const id = params[0];
-      return store.users.find(u => u.id === id) || null;
-    }
+async function getQuery(sql, params = []) {
+  const dbInst = await initDatabase();
+  if (!dbInst) return null;
+  const stmt = dbInst.prepare(sql);
+  stmt.bind(sanitizeParams(params));
+  let row = null;
+  if (stmt.step()) {
+    row = stmt.getAsObject();
   }
-  if (lowerSql.includes('from products')) {
-    const id = params[0];
-    const item = store.products.find(p => p.id === id);
-    if (!item) return null;
-    return formatProductRow(item);
-  }
-  return null;
+  stmt.free();
+  return row;
 }
 
-function inMemoryAll(sql, params) {
-  const store = getMemoryStore();
-  const lowerSql = sql.toLowerCase();
-
-  if (lowerSql.includes('from products')) {
-    return store.products.map(formatProductRow);
+async function allQuery(sql, params = []) {
+  const dbInst = await initDatabase();
+  if (!dbInst) return [];
+  const stmt = dbInst.prepare(sql);
+  stmt.bind(sanitizeParams(params));
+  const rows = [];
+  while (stmt.step()) {
+    rows.push(stmt.getAsObject());
   }
-  if (lowerSql.includes('from orders')) {
-    return store.orders || [];
-  }
-  return [];
-}
-
-function formatProductRow(p) {
-  return {
-    ...p,
-    priceTiers: typeof p.priceTiers === 'string' ? p.priceTiers : JSON.stringify(p.priceTiers || []),
-    colors: typeof p.colors === 'string' ? p.colors : JSON.stringify(p.colors || []),
-    certifications: typeof p.certifications === 'string' ? p.certifications : JSON.stringify(p.certifications || []),
-    images: typeof p.images === 'string' ? p.images : JSON.stringify(p.images || []),
-    leadTimes: typeof p.leadTimes === 'string' ? p.leadTimes : JSON.stringify(p.leadTimes || {}),
-    ecoMetrics: typeof p.ecoMetrics === 'string' ? p.ecoMetrics : JSON.stringify(p.ecoMetrics || {}),
-    millDetails: typeof p.millDetails === 'string' ? p.millDetails : JSON.stringify(p.millDetails || {})
-  };
+  stmt.free();
+  return rows;
 }
 
 function parseJsonField(val, fallback) {
@@ -156,75 +252,9 @@ function parseProductRow(p) {
   };
 }
 
-async function initDb() {
-  if (!db) return;
-  db.serialize(() => {
-    db.run(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        name TEXT,
-        role TEXT NOT NULL,
-        companyName TEXT,
-        onboardingCompleted INTEGER DEFAULT 0,
-        createdAt TEXT
-      )
-    `);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS products (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        supplierId TEXT,
-        supplierName TEXT,
-        category TEXT NOT NULL,
-        description TEXT,
-        price REAL NOT NULL,
-        priceTiers TEXT,
-        moq INTEGER NOT NULL,
-        stock INTEGER NOT NULL,
-        inStock INTEGER DEFAULT 1,
-        gsm INTEGER,
-        width TEXT,
-        weave TEXT,
-        fiberComposition TEXT,
-        colors TEXT,
-        certifications TEXT,
-        leadTimes TEXT,
-        ecoMetrics TEXT,
-        millDetails TEXT,
-        images TEXT,
-        rating REAL DEFAULT 4.8,
-        reviewCount INTEGER DEFAULT 0,
-        createdAt TEXT
-      )
-    `);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS orders (
-        id TEXT PRIMARY KEY,
-        buyerId TEXT NOT NULL,
-        buyerName TEXT,
-        buyerCompany TEXT,
-        supplierId TEXT,
-        supplierName TEXT,
-        orderNumber TEXT UNIQUE NOT NULL,
-        items TEXT NOT NULL,
-        totalAmount REAL,
-        total REAL,
-        status TEXT NOT NULL,
-        shippingAddress TEXT,
-        paymentStatus TEXT,
-        paymentMethod TEXT,
-        notes TEXT,
-        createdAt TEXT
-      )
-    `);
-  });
-}
-
 // ── PRODUCT API HELPERS ──
 async function getProducts() {
-  const rows = await allQuery('SELECT * FROM products');
+  const rows = await allQuery('SELECT * FROM products ORDER BY name ASC');
   return rows.map(parseProductRow);
 }
 
@@ -234,31 +264,18 @@ async function getProductById(id) {
 }
 
 async function createProduct(prod) {
-  const store = getMemoryStore();
   const id = prod.id || 'prod_' + Date.now();
-  const newProd = {
-    ...prod,
-    id,
-    supplierId: prod.supplierId || 'user_supplier_demo',
-    supplierName: prod.supplierName || 'Apex Mills International',
-    inStock: prod.inStock ?? true,
-    createdAt: new Date().toISOString()
-  };
-  
-  if (!store.products) store.products = [];
-  store.products.unshift(newProd);
-
   await runQuery(
     `INSERT INTO products (
       id, name, supplierId, supplierName, category, description, price, priceTiers,
       moq, stock, inStock, gsm, width, weave, fiberComposition, colors, certifications, images, createdAt
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      id, newProd.name, newProd.supplierId, newProd.supplierName,
-      newProd.category, newProd.description || '', newProd.price, JSON.stringify(newProd.priceTiers || []),
-      newProd.moq, newProd.stock, newProd.inStock ? 1 : 0, newProd.gsm || 150, newProd.width || '150 cm',
-      newProd.weave || 'Plain', newProd.fiberComposition || '100% Cotton', JSON.stringify(newProd.colors || []),
-      JSON.stringify(newProd.certifications || []), JSON.stringify(newProd.images || []), newProd.createdAt
+      id, prod.name, prod.supplierId || 'user_supplier_demo', prod.supplierName || 'Apex Mills International',
+      prod.category, prod.description || '', prod.price, JSON.stringify(prod.priceTiers || []),
+      prod.moq, prod.stock, prod.inStock ? 1 : 0, prod.gsm || 150, prod.width || '150 cm',
+      prod.weave || 'Plain', prod.fiberComposition || '100% Cotton', JSON.stringify(prod.colors || []),
+      JSON.stringify(prod.certifications || []), JSON.stringify(prod.images || []), new Date().toISOString()
     ]
   );
   return getProductById(id);
@@ -269,12 +286,6 @@ async function updateProduct(id, updates) {
   if (!existing) return null;
   const merged = { ...existing, ...updates };
 
-  const store = getMemoryStore();
-  if (store.products) {
-    const idx = store.products.findIndex(p => p.id === id);
-    if (idx >= 0) store.products[idx] = merged;
-  }
-
   await runQuery(
     `UPDATE products SET name=?, category=?, price=?, moq=?, stock=?, inStock=?, description=? WHERE id=?`,
     [merged.name, merged.category, merged.price, merged.moq, merged.stock, merged.inStock ? 1 : 0, merged.description, id]
@@ -283,10 +294,6 @@ async function updateProduct(id, updates) {
 }
 
 async function deleteProduct(id) {
-  const store = getMemoryStore();
-  if (store.products) {
-    store.products = store.products.filter(p => p.id !== id);
-  }
   await runQuery('DELETE FROM products WHERE id = ?', [id]);
   return true;
 }
@@ -294,26 +301,15 @@ async function deleteProduct(id) {
 // ── USER API HELPERS ──
 async function findUserByEmail(email) {
   if (!email) return null;
-  const store = getMemoryStore();
-  const foundInMemory = store.users.find(u => (u.email || '').toLowerCase() === (email || '').toLowerCase());
-  if (foundInMemory) return foundInMemory;
-
   return getQuery('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
 }
 
 async function findUserById(id) {
   if (!id) return null;
-  const store = getMemoryStore();
-  const foundInMemory = store.users.find(u => u.id === id);
-  if (foundInMemory) return foundInMemory;
-
   return getQuery('SELECT * FROM users WHERE id = ?', [id]);
 }
 
 async function createUser(user) {
-  const store = getMemoryStore();
-  if (!store.users) store.users = [];
-
   const id = user.id || 'user_' + Date.now();
   const newUser = {
     ...user,
@@ -323,15 +319,8 @@ async function createUser(user) {
     createdAt: user.createdAt || new Date().toISOString()
   };
 
-  const existingIdx = store.users.findIndex(u => (u.email || '').toLowerCase() === (user.email || '').toLowerCase());
-  if (existingIdx >= 0) {
-    store.users[existingIdx] = newUser;
-  } else {
-    store.users.push(newUser);
-  }
-
   await runQuery(
-    `INSERT INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
+    `INSERT OR REPLACE INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, newUser.email, newUser.password, newUser.name, newUser.role, newUser.companyName, newUser.onboardingCompleted, newUser.createdAt]
   );
@@ -340,21 +329,12 @@ async function createUser(user) {
 
 // ── ORDER API HELPERS ──
 async function getOrders() {
-  const store = getMemoryStore();
   const dbRows = await allQuery('SELECT * FROM orders ORDER BY createdAt DESC');
-  
-  const map = new Map();
-  (store.orders || []).forEach(o => map.set(o.id || o.orderNumber, o));
-  dbRows.forEach(r => {
-    const formatted = {
-      ...r,
-      items: parseJsonField(r.items, []),
-      shippingAddress: parseJsonField(r.shippingAddress, {})
-    };
-    map.set(r.id || r.orderNumber, formatted);
-  });
-  
-  return Array.from(map.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return dbRows.map(r => ({
+    ...r,
+    items: parseJsonField(r.items, []),
+    shippingAddress: parseJsonField(r.shippingAddress, {})
+  }));
 }
 
 async function getBuyerOrders(buyerId) {
@@ -369,9 +349,6 @@ async function getSupplierOrders() {
 }
 
 async function createOrder(orderData) {
-  const store = getMemoryStore();
-  if (!store.orders) store.orders = [];
-
   const id = orderData.id || 'ord_' + Date.now();
   const orderNumber = orderData.orderNumber || 'ORD-' + Math.floor(100000 + Math.random() * 900000);
   const totalAmount = orderData.totalAmount || orderData.total || 0;
@@ -386,17 +363,8 @@ async function createOrder(orderData) {
     createdAt: orderData.createdAt || new Date().toISOString()
   };
 
-  const existingIdx = store.orders.findIndex(
-    o => (o.id && o.id === id) || (o.orderNumber && o.orderNumber === orderNumber)
-  );
-  if (existingIdx >= 0) {
-    store.orders[existingIdx] = { ...store.orders[existingIdx], ...fullOrder };
-  } else {
-    store.orders.unshift(fullOrder);
-  }
-
   await runQuery(
-    `INSERT INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
+    `INSERT OR REPLACE INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id, fullOrder.buyerId, fullOrder.buyerName, fullOrder.buyerCompany,
@@ -411,45 +379,39 @@ async function createOrder(orderData) {
 }
 
 async function updateOrderStatus(orderId, status) {
-  const store = getMemoryStore();
-  if (store.orders) {
-    const found = store.orders.find(o => o.id === orderId || o.orderNumber === orderId);
-    if (found) found.status = status;
-  }
   await runQuery('UPDATE orders SET status = ? WHERE id = ? OR orderNumber = ?', [status, orderId, orderId]);
-  return true;
+  return getQuery('SELECT * FROM orders WHERE id = ? OR orderNumber = ?', [orderId, orderId]);
 }
 
 // ── ONBOARDING API HELPERS ──
 async function getOnboardingProfile(userId) {
-  const store = getMemoryStore();
-  const found = (store.onboarding_profiles || []).find(p => p.userId === userId);
-  if (found) return found;
   return getQuery('SELECT * FROM onboarding_profiles WHERE userId = ?', [userId]);
 }
 
 async function saveOnboardingProfile(profileData) {
-  const store = getMemoryStore();
-  if (!store.onboarding_profiles) store.onboarding_profiles = [];
-  const existingIdx = store.onboarding_profiles.findIndex(p => p.userId === profileData.userId);
-  if (existingIdx >= 0) {
-    store.onboarding_profiles[existingIdx] = { ...store.onboarding_profiles[existingIdx], ...profileData };
-  } else {
-    store.onboarding_profiles.push(profileData);
-  }
-
-  if (store.users) {
-    const user = store.users.find(u => u.id === profileData.userId);
-    if (user) user.onboardingCompleted = 1;
-  }
-
+  await runQuery(
+    `INSERT OR REPLACE INTO onboarding_profiles (userId, role, businessType, industry, categoriesOfInterest, preferredFabricTypes, typicalOrderQty, budgetRange, minOrderQty, contactPhone, operatingHours, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      profileData.userId, profileData.role, profileData.businessType, profileData.industry,
+      JSON.stringify(profileData.categoriesOfInterest || []), JSON.stringify(profileData.preferredFabricTypes || []),
+      profileData.typicalOrderQty, profileData.budgetRange, profileData.minOrderQty || 100,
+      profileData.contactPhone, profileData.operatingHours, profileData.notes || ''
+    ]
+  );
   await runQuery('UPDATE users SET onboardingCompleted = 1 WHERE id = ?', [profileData.userId]);
   return profileData;
 }
 
+// Initialize database immediately on module import
+initDatabase();
+
 module.exports = {
-  db,
-  initDb,
+  db: {
+    serialize: (cb) => cb(),
+    run: (sql, params, cb) => runQuery(sql, params).then(r => cb && cb.call(r, null)).catch(e => cb && cb(e))
+  },
+  initDb: initDatabase,
   runQuery,
   getQuery,
   allQuery,
