@@ -8,6 +8,19 @@ export function getAuthHeaders() {
   };
 }
 
+function getCurrentUserInfo() {
+  try {
+    const token = localStorage.getItem('texflow_token');
+    if (!token) return null;
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const jsonStr = atob(parts[1]);
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    return null;
+  }
+}
+
 // ── CLIENT-SIDE PERSISTENT STORAGE HELPERS FOR ORDERS ──
 function getLocalOrders() {
   try {
@@ -37,12 +50,10 @@ function saveLocalOrder(order) {
 
 function mergeOrders(serverOrders, localOrders) {
   const map = new Map();
-  // Add local orders first
   (localOrders || []).forEach(o => {
     const key = o.id || o.orderNumber;
     if (key) map.set(key, o);
   });
-  // Overlay server orders
   (serverOrders || []).forEach(o => {
     const key = o.id || o.orderNumber;
     if (key) map.set(key, o);
@@ -153,6 +164,7 @@ export const api = {
 
   // Orders
   createOrder: async (orderData) => {
+    const userInfo = getCurrentUserInfo();
     try {
       const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
@@ -170,9 +182,10 @@ export const api = {
     const fallbackOrder = {
       id: 'ord_' + Date.now(),
       orderNumber: 'ORD-' + Math.floor(100000 + Math.random() * 900000),
-      buyerId: orderData.buyerId || 'user_buyer_demo',
-      buyerName: orderData.buyerName || 'Elena Rostova',
-      buyerCompany: orderData.buyerCompany || 'Rostova Atelier',
+      buyerId: (userInfo && userInfo.id) || orderData.buyerId || 'user_buyer_demo',
+      buyerName: (userInfo && userInfo.name) || orderData.buyerName || 'Elena Rostova',
+      buyerEmail: (userInfo && userInfo.email) || orderData.buyerEmail || 'buyer@demo.com',
+      buyerCompany: (userInfo && userInfo.company) || orderData.buyerCompany || 'Rostova Atelier',
       supplierId: orderData.supplierId || 'user_supplier_demo',
       supplierName: orderData.supplierName || 'Apex Mills International',
       items: orderData.items || [],
@@ -188,20 +201,33 @@ export const api = {
   },
 
   getBuyerOrders: async () => {
-    const local = getLocalOrders();
+    const userInfo = getCurrentUserInfo();
+    const allLocal = getLocalOrders();
+    const userLocal = userInfo ? allLocal.filter(o =>
+      (o.buyerId && o.buyerId === userInfo.id) ||
+      (o.buyerEmail && userInfo.email && o.buyerEmail.toLowerCase() === userInfo.email.toLowerCase()) ||
+      (userInfo.email === 'buyer@demo.com' && (!o.buyerId || o.buyerId === 'user_buyer_demo'))
+    ) : allLocal;
+
     try {
       const res = await fetch(`${API_BASE}/orders/buyer`, {
         headers: getAuthHeaders()
       });
       const data = await res.json();
-      if (res.ok && data.orders) {
-        const merged = mergeOrders(data.orders, local);
-        return { orders: merged };
+      if (res.ok && Array.isArray(data.orders)) {
+        const merged = mergeOrders(data.orders, userLocal);
+        const userOrders = userInfo ? merged.filter(o =>
+          (o.buyerId && o.buyerId === userInfo.id) ||
+          (o.buyerEmail && userInfo.email && o.buyerEmail.toLowerCase() === userInfo.email.toLowerCase()) ||
+          (userInfo.email === 'buyer@demo.com' && (!o.buyerId || o.buyerId === 'user_buyer_demo'))
+        ) : merged;
+
+        return { orders: userOrders };
       }
     } catch (err) {
-      console.warn('Failed to fetch buyer orders from API, using persistent local storage:', err);
+      console.warn('Failed to fetch buyer orders from API, using user local storage:', err);
     }
-    return { orders: local };
+    return { orders: userLocal };
   },
 
   getSupplierOrders: async () => {

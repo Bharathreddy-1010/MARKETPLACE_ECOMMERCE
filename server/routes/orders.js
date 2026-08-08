@@ -115,9 +115,16 @@ router.post('/', async (req, res) => {
 router.get('/buyer', async (req, res) => {
   try {
     const user = verifyToken(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
     const allOrders = await db.getOrders();
-    const buyerOrders = user ? allOrders.filter(o => o.buyerId === user.id || user.email === 'buyer@demo.com') : allOrders;
-    return res.json({ orders: buyerOrders.length > 0 ? buyerOrders : allOrders });
+    const buyerOrders = allOrders.filter(o => 
+      (o.buyerId && o.buyerId === user.id) || 
+      (o.buyerEmail && user.email && o.buyerEmail.toLowerCase() === user.email.toLowerCase()) ||
+      (user.email === 'buyer@demo.com' && (!o.buyerId || o.buyerId === 'user_buyer_demo'))
+    );
+    return res.json({ orders: buyerOrders });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch buyer orders' });
   }
