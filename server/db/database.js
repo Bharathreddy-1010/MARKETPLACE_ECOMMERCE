@@ -1,234 +1,162 @@
-const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
-const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const DB_PATH = isVercel ? '/tmp/texflow.db' : path.join(__dirname, 'texflow.db');
 const SEED_DATA_PATH = path.join(__dirname, 'data.json');
 
-let db = null;
-let SQL = null;
-let initPromise = null;
+// In-Memory Relational Database Tables
+let tables = null;
 
-async function initDatabase() {
-  if (db) return db;
-  if (initPromise) return initPromise;
+function getDbTables() {
+  if (!tables) {
+    tables = {
+      users: [],
+      products: [],
+      orders: [],
+      onboarding_profiles: []
+    };
 
-  initPromise = (async () => {
-    try {
-      SQL = await initSqlJs();
-      if (fs.existsSync(DB_PATH)) {
-        const filebuffer = fs.readFileSync(DB_PATH);
-        db = new SQL.Database(filebuffer);
-      } else {
-        db = new SQL.Database();
+    if (fs.existsSync(SEED_DATA_PATH)) {
+      try {
+        const seedRaw = fs.readFileSync(SEED_DATA_PATH, 'utf8');
+        const seedData = JSON.parse(seedRaw);
+        if (Array.isArray(seedData.users)) tables.users = [...seedData.users];
+        if (Array.isArray(seedData.products)) tables.products = [...seedData.products];
+        if (Array.isArray(seedData.orders)) tables.orders = [...seedData.orders];
+        if (Array.isArray(seedData.onboarding_profiles)) tables.onboarding_profiles = [...seedData.onboarding_profiles];
+      } catch (e) {
+        console.error('Error loading seed data into database:', e);
       }
-      console.log(`📦 Connected to WASM SQLite Database at ${DB_PATH}`);
-      await createTablesAndSeed();
-    } catch (err) {
-      console.error('❌ Failed to initialize WASM SQLite Database:', err);
-    }
-    return db;
-  })();
-
-  return initPromise;
-}
-
-function saveDbToDisk() {
-  if (!db) return;
-  try {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-  } catch (e) {
-    // ignore on read-only file systems
-  }
-}
-
-async function createTablesAndSeed() {
-  if (!db) return;
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      name TEXT,
-      role TEXT NOT NULL,
-      companyName TEXT,
-      onboardingCompleted INTEGER DEFAULT 0,
-      createdAt TEXT
-    );
-    CREATE TABLE IF NOT EXISTS products (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      supplierId TEXT,
-      supplierName TEXT,
-      category TEXT NOT NULL,
-      description TEXT,
-      price REAL NOT NULL,
-      priceTiers TEXT,
-      moq INTEGER NOT NULL,
-      stock INTEGER NOT NULL,
-      inStock INTEGER DEFAULT 1,
-      gsm INTEGER,
-      width TEXT,
-      weave TEXT,
-      fiberComposition TEXT,
-      colors TEXT,
-      certifications TEXT,
-      leadTimes TEXT,
-      ecoMetrics TEXT,
-      millDetails TEXT,
-      images TEXT,
-      rating REAL DEFAULT 4.8,
-      reviewCount INTEGER DEFAULT 0,
-      createdAt TEXT
-    );
-    CREATE TABLE IF NOT EXISTS orders (
-      id TEXT PRIMARY KEY,
-      buyerId TEXT NOT NULL,
-      buyerName TEXT,
-      buyerCompany TEXT,
-      supplierId TEXT,
-      supplierName TEXT,
-      orderNumber TEXT UNIQUE NOT NULL,
-      items TEXT NOT NULL,
-      totalAmount REAL,
-      total REAL,
-      status TEXT NOT NULL,
-      shippingAddress TEXT,
-      paymentStatus TEXT,
-      paymentMethod TEXT,
-      notes TEXT,
-      createdAt TEXT
-    );
-    CREATE TABLE IF NOT EXISTS onboarding_profiles (
-      userId TEXT PRIMARY KEY,
-      role TEXT,
-      businessType TEXT,
-      industry TEXT,
-      categoriesOfInterest TEXT,
-      preferredFabricTypes TEXT,
-      typicalOrderQty TEXT,
-      budgetRange TEXT,
-      minOrderQty INTEGER,
-      contactPhone TEXT,
-      operatingHours TEXT,
-      notes TEXT
-    );
-  `);
-
-  try { db.run('ALTER TABLE orders ADD COLUMN buyerName TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN buyerCompany TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN supplierId TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN supplierName TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN paymentStatus TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN paymentMethod TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN notes TEXT;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN totalAmount REAL;'); } catch(e){}
-  try { db.run('ALTER TABLE orders ADD COLUMN total REAL;'); } catch(e){}
-
-  // Seed baseline data from data.json if products table is empty
-  const checkStmt = db.prepare('SELECT COUNT(*) as count FROM products');
-  let count = 0;
-  if (checkStmt.step()) {
-    count = checkStmt.getAsObject().count;
-  }
-  checkStmt.free();
-
-  if (count === 0 && fs.existsSync(SEED_DATA_PATH)) {
-    try {
-      const seedRaw = fs.readFileSync(SEED_DATA_PATH, 'utf8');
-      const seedData = JSON.parse(seedRaw);
-
-      if (Array.isArray(seedData.users)) {
-        for (const u of seedData.users) {
-          db.run(
-            `INSERT OR IGNORE INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [u.id, u.email, u.password, u.name, u.role, u.companyName || u.company || '', u.onboardingCompleted ? 1 : 0, u.createdAt || new Date().toISOString()]
-          );
-        }
-      }
-
-      if (Array.isArray(seedData.products)) {
-        for (const p of seedData.products) {
-          db.run(
-            `INSERT OR IGNORE INTO products (
-              id, name, supplierId, supplierName, category, description, price, priceTiers,
-              moq, stock, inStock, gsm, width, weave, fiberComposition, colors, certifications, images, createdAt
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              p.id, p.name, p.supplierId || 'user_supplier_demo', p.supplierName || 'Apex Mills International',
-              p.category, p.description || '', p.price, JSON.stringify(p.priceTiers || []),
-              p.moq, p.stock, p.inStock ? 1 : 0, p.gsm || 150, p.width || '150 cm',
-              p.weave || 'Plain', p.fiberComposition || '100% Cotton', JSON.stringify(p.colors || []),
-              JSON.stringify(p.certifications || []), JSON.stringify(p.images || []), p.createdAt || new Date().toISOString()
-            ]
-          );
-        }
-      }
-
-      if (Array.isArray(seedData.orders)) {
-        for (const o of seedData.orders) {
-          db.run(
-            `INSERT OR IGNORE INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              o.id, o.buyerId, o.buyerName, o.buyerCompany,
-              o.supplierId || 'user_supplier_demo', o.supplierName || 'Apex Mills International',
-              o.orderNumber || o.id, JSON.stringify(o.items || []), o.totalAmount || o.total || 0, o.total || o.totalAmount || 0,
-              o.status || 'Pending', JSON.stringify(o.shippingAddress || {}),
-              o.paymentStatus || 'Paid', o.paymentMethod || 'Credit Card',
-              o.notes || '', o.createdAt || new Date().toISOString()
-            ]
-          );
-        }
-      }
-
-      saveDbToDisk();
-    } catch (e) {
-      console.error('Error seeding data:', e);
     }
   }
+  return tables;
 }
 
-function sanitizeParams(params = []) {
-  return params.map(p => (p === undefined ? null : p));
-}
-
+// ── SQL QUERY ENGINE ──
 async function runQuery(sql, params = []) {
-  const dbInst = await initDatabase();
-  if (!dbInst) return { lastID: Date.now(), changes: 1 };
-  dbInst.run(sql, sanitizeParams(params));
-  saveDbToDisk();
+  const db = getDbTables();
+  const lowerSql = sql.toLowerCase().trim();
+
+  if (lowerSql.startsWith('insert')) {
+    if (lowerSql.includes('into users')) {
+      const [id, email, password, name, role, companyName, onboardingCompleted, createdAt] = params;
+      const newUser = { id, email, password, name, role, companyName, onboardingCompleted: Number(onboardingCompleted), createdAt };
+      const idx = db.users.findIndex(u => u.id === id || (u.email || '').toLowerCase() === (email || '').toLowerCase());
+      if (idx >= 0) db.users[idx] = { ...db.users[idx], ...newUser };
+      else db.users.push(newUser);
+    } else if (lowerSql.includes('into products')) {
+      const [id, name, supplierId, supplierName, category, description, price, priceTiers, moq, stock, inStock, gsm, width, weave, fiberComposition, colors, certifications, images, createdAt] = params;
+      const newProd = {
+        id, name, supplierId, supplierName, category, description, price: Number(price),
+        priceTiers, moq: Number(moq), stock: Number(stock), inStock: Boolean(inStock), gsm, width, weave,
+        fiberComposition, colors, certifications, images, createdAt
+      };
+      const idx = db.products.findIndex(p => p.id === id);
+      if (idx >= 0) db.products[idx] = newProd;
+      else db.products.unshift(newProd);
+    } else if (lowerSql.includes('into orders')) {
+      const [id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt] = params;
+      const newOrder = {
+        id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items,
+        totalAmount: Number(totalAmount), total: Number(total || totalAmount), status, shippingAddress,
+        paymentStatus, paymentMethod, notes, createdAt
+      };
+      const idx = db.orders.findIndex(o => o.id === id || o.orderNumber === orderNumber);
+      if (idx >= 0) db.orders[idx] = { ...db.orders[idx], ...newOrder };
+      else db.orders.unshift(newOrder);
+    } else if (lowerSql.includes('into onboarding_profiles')) {
+      const [userId, role, businessType, industry, categoriesOfInterest, preferredFabricTypes, typicalOrderQty, budgetRange, minOrderQty, contactPhone, operatingHours, notes] = params;
+      const profile = { userId, role, businessType, industry, categoriesOfInterest, preferredFabricTypes, typicalOrderQty, budgetRange, minOrderQty, contactPhone, operatingHours, notes };
+      const idx = db.onboarding_profiles.findIndex(p => p.userId === userId);
+      if (idx >= 0) db.onboarding_profiles[idx] = profile;
+      else db.onboarding_profiles.push(profile);
+    }
+  } else if (lowerSql.startsWith('update')) {
+    if (lowerSql.includes('users set onboardingcompleted')) {
+      const userId = params[0];
+      const user = db.users.find(u => u.id === userId);
+      if (user) user.onboardingCompleted = 1;
+    } else if (lowerSql.includes('update products set')) {
+      const [name, category, price, moq, stock, inStock, description, id] = params;
+      const prod = db.products.find(p => p.id === id);
+      if (prod) {
+        Object.assign(prod, { name, category, price: Number(price), moq: Number(moq), stock: Number(stock), inStock: Boolean(inStock), description });
+      }
+    } else if (lowerSql.includes('update orders set status')) {
+      const [status, orderId] = params;
+      const order = db.orders.find(o => o.id === orderId || o.orderNumber === orderId);
+      if (order) order.status = status;
+    }
+  } else if (lowerSql.startsWith('delete')) {
+    if (lowerSql.includes('from products')) {
+      const id = params[0];
+      db.products = db.products.filter(p => p.id !== id);
+    }
+  }
+
   return { lastID: Date.now(), changes: 1 };
 }
 
 async function getQuery(sql, params = []) {
-  const dbInst = await initDatabase();
-  if (!dbInst) return null;
-  const stmt = dbInst.prepare(sql);
-  stmt.bind(sanitizeParams(params));
-  let row = null;
-  if (stmt.step()) {
-    row = stmt.getAsObject();
+  const db = getDbTables();
+  const lowerSql = sql.toLowerCase().trim();
+
+  if (lowerSql.includes('from users')) {
+    if (lowerSql.includes('email') || lowerSql.includes('lower(email)')) {
+      const email = (params[0] || '').toLowerCase();
+      return db.users.find(u => (u.email || '').toLowerCase() === email) || null;
+    }
+    if (lowerSql.includes('id =')) {
+      const id = params[0];
+      return db.users.find(u => u.id === id) || null;
+    }
   }
-  stmt.free();
-  return row;
+  if (lowerSql.includes('from products')) {
+    const id = params[0];
+    const p = db.products.find(item => item.id === id);
+    return p ? formatProductRow(p) : null;
+  }
+  if (lowerSql.includes('from orders')) {
+    const id = params[0];
+    return db.orders.find(o => o.id === id || o.orderNumber === id) || null;
+  }
+  if (lowerSql.includes('from onboarding_profiles')) {
+    const userId = params[0];
+    return db.onboarding_profiles.find(p => p.userId === userId) || null;
+  }
+  return null;
 }
 
 async function allQuery(sql, params = []) {
-  const dbInst = await initDatabase();
-  if (!dbInst) return [];
-  const stmt = dbInst.prepare(sql);
-  stmt.bind(sanitizeParams(params));
-  const rows = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject());
+  const db = getDbTables();
+  const lowerSql = sql.toLowerCase().trim();
+
+  if (lowerSql.includes('from products')) {
+    return db.products.map(formatProductRow);
   }
-  stmt.free();
-  return rows;
+  if (lowerSql.includes('from orders')) {
+    if (lowerSql.includes('buyerid =')) {
+      const buyerId = params[0];
+      return db.orders.filter(o => o.buyerId === buyerId);
+    }
+    return db.orders;
+  }
+  if (lowerSql.includes('from users')) {
+    return db.users;
+  }
+  return [];
+}
+
+function formatProductRow(p) {
+  return {
+    ...p,
+    priceTiers: typeof p.priceTiers === 'string' ? p.priceTiers : JSON.stringify(p.priceTiers || []),
+    colors: typeof p.colors === 'string' ? p.colors : JSON.stringify(p.colors || []),
+    certifications: typeof p.certifications === 'string' ? p.certifications : JSON.stringify(p.certifications || []),
+    images: typeof p.images === 'string' ? p.images : JSON.stringify(p.images || []),
+    leadTimes: typeof p.leadTimes === 'string' ? p.leadTimes : JSON.stringify(p.leadTimes || {}),
+    ecoMetrics: typeof p.ecoMetrics === 'string' ? p.ecoMetrics : JSON.stringify(p.ecoMetrics || {}),
+    millDetails: typeof p.millDetails === 'string' ? p.millDetails : JSON.stringify(p.millDetails || {})
+  };
 }
 
 function parseJsonField(val, fallback) {
@@ -254,7 +182,7 @@ function parseProductRow(p) {
 
 // ── PRODUCT API HELPERS ──
 async function getProducts() {
-  const rows = await allQuery('SELECT * FROM products ORDER BY name ASC');
+  const rows = await allQuery('SELECT * FROM products');
   return rows.map(parseProductRow);
 }
 
@@ -320,7 +248,7 @@ async function createUser(user) {
   };
 
   await runQuery(
-    `INSERT OR REPLACE INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
+    `INSERT INTO users (id, email, password, name, role, companyName, onboardingCompleted, createdAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, newUser.email, newUser.password, newUser.name, newUser.role, newUser.companyName, newUser.onboardingCompleted, newUser.createdAt]
   );
@@ -329,7 +257,7 @@ async function createUser(user) {
 
 // ── ORDER API HELPERS ──
 async function getOrders() {
-  const dbRows = await allQuery('SELECT * FROM orders ORDER BY createdAt DESC');
+  const dbRows = await allQuery('SELECT * FROM orders');
   return dbRows.map(r => ({
     ...r,
     items: parseJsonField(r.items, []),
@@ -364,7 +292,7 @@ async function createOrder(orderData) {
   };
 
   await runQuery(
-    `INSERT OR REPLACE INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
+    `INSERT INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id, fullOrder.buyerId, fullOrder.buyerName, fullOrder.buyerCompany,
@@ -379,7 +307,7 @@ async function createOrder(orderData) {
 }
 
 async function updateOrderStatus(orderId, status) {
-  await runQuery('UPDATE orders SET status = ? WHERE id = ? OR orderNumber = ?', [status, orderId, orderId]);
+  await runQuery('UPDATE orders SET status = ? WHERE id = ? OR orderNumber = ?', [status, orderId]);
   return getQuery('SELECT * FROM orders WHERE id = ? OR orderNumber = ?', [orderId, orderId]);
 }
 
@@ -390,7 +318,7 @@ async function getOnboardingProfile(userId) {
 
 async function saveOnboardingProfile(profileData) {
   await runQuery(
-    `INSERT OR REPLACE INTO onboarding_profiles (userId, role, businessType, industry, categoriesOfInterest, preferredFabricTypes, typicalOrderQty, budgetRange, minOrderQty, contactPhone, operatingHours, notes)
+    `INSERT INTO onboarding_profiles (userId, role, businessType, industry, categoriesOfInterest, preferredFabricTypes, typicalOrderQty, budgetRange, minOrderQty, contactPhone, operatingHours, notes)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       profileData.userId, profileData.role, profileData.businessType, profileData.industry,
@@ -403,15 +331,12 @@ async function saveOnboardingProfile(profileData) {
   return profileData;
 }
 
-// Initialize database immediately on module import
-initDatabase();
-
 module.exports = {
   db: {
     serialize: (cb) => cb(),
     run: (sql, params, cb) => runQuery(sql, params).then(r => cb && cb.call(r, null)).catch(e => cb && cb(e))
   },
-  initDb: initDatabase,
+  initDb: () => Promise.resolve(),
   runQuery,
   getQuery,
   allQuery,
