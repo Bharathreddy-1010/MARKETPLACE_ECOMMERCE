@@ -158,4 +158,20 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
+// Sync Local Orders with Backend DB
+router.post('/sync', async (req, res) => {
+  try {
+    const { orders } = req.body;
+    if (Array.isArray(orders)) {
+      for (const order of orders) {
+        await db.createOrder(order);
+      }
+    }
+    const all = await db.getOrders();
+    return res.json({ orders: all });
+  } catch (err) {
+    return res.status(500).json({ error: 'Sync failed' });
+  }
+});
+
 module.exports = router;

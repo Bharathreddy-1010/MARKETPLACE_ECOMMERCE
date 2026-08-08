@@ -386,7 +386,14 @@ async function createOrder(orderData) {
     createdAt: orderData.createdAt || new Date().toISOString()
   };
 
-  store.orders.unshift(fullOrder);
+  const existingIdx = store.orders.findIndex(
+    o => (o.id && o.id === id) || (o.orderNumber && o.orderNumber === orderNumber)
+  );
+  if (existingIdx >= 0) {
+    store.orders[existingIdx] = { ...store.orders[existingIdx], ...fullOrder };
+  } else {
+    store.orders.unshift(fullOrder);
+  }
 
   await runQuery(
     `INSERT INTO orders (id, buyerId, buyerName, buyerCompany, supplierId, supplierName, orderNumber, items, totalAmount, total, status, shippingAddress, paymentStatus, paymentMethod, notes, createdAt)
